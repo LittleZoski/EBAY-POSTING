@@ -1,6 +1,9 @@
 # Environment variables
 .env
 
+# OAuth tokens (sensitive!)
+ebay_tokens.json
+
 # Python
 __pycache__/
 *.py[cod]

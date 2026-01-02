@@ -177,10 +177,11 @@ class EbayAuthManager:
         else:
             base_url = "https://auth.sandbox.ebay.com/oauth2/authorize"
 
+        # Request all necessary scopes for listing creation
         scopes = [
             "https://api.ebay.com/oauth/api_scope/sell.inventory",
-            "https://api.ebay.com/oauth/api_scope/sell.marketing",
-            "https://api.ebay.com/oauth/api_scope/sell.fulfillment"
+            "https://api.ebay.com/oauth/api_scope/sell.account",  # For business policies
+            "https://api.ebay.com/oauth/api_scope/sell.marketing.readonly"  # For offers
         ]
 
         consent_url = (

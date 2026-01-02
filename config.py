@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Claude API Settings
+    anthropic_api_key: str
+
     class Config:
         env_file = ".env"
         case_sensitive = False

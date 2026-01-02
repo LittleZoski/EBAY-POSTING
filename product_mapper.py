@@ -31,16 +31,25 @@ class ProductMapper:
         except ValueError:
             return 0.0
 
-    def calculate_ebay_price(self, amazon_price: float) -> float:
+    def calculate_ebay_price(self, amazon_price: float, multiplier: float = None) -> float:
         """
-        Calculate eBay listing price with markup.
-        Formula: (amazon_price * (1 + markup%)) + fixed_markup
+        Calculate eBay listing price with multiplier or markup.
+
+        If multiplier is provided, use: amazon_price * multiplier
+        Otherwise use: (amazon_price * (1 + markup%)) + fixed_markup
+
+        Default multiplier is 2 if not specified in product data.
         """
         if amazon_price <= 0:
             return 0.0
 
-        markup_multiplier = 1 + (self.price_markup_percentage / 100)
-        calculated_price = (amazon_price * markup_multiplier) + self.fixed_markup_amount
+        if multiplier is not None:
+            # Use the multiplier directly
+            calculated_price = amazon_price * multiplier
+        else:
+            # Use default markup from settings
+            markup_multiplier = 1 + (self.price_markup_percentage / 100)
+            calculated_price = (amazon_price * markup_multiplier) + self.fixed_markup_amount
 
         # Round to 2 decimal places
         return round(calculated_price, 2)
@@ -57,10 +66,18 @@ class ProductMapper:
         Attempt to extract brand from title or description.
         eBay requires brand for many categories.
         """
+        # Try to extract first word if it looks like a brand (all caps or capitalized)
+        words = title.split()
+        if words:
+            first_word = words[0]
+            # Check if first word is likely a brand name
+            if first_word.isupper() or (len(first_word) > 1 and first_word[0].isupper()):
+                return first_word
+
         # Common brand indicators
         brand_keywords = ["by", "Brand:", "Manufacturer:"]
 
-        # Check title first
+        # Check title for brand keywords
         for keyword in brand_keywords:
             if keyword.lower() in title.lower():
                 parts = title.split(keyword, 1)
@@ -68,8 +85,9 @@ class ProductMapper:
                     potential_brand = parts[1].strip().split()[0]
                     return potential_brand
 
-        # Default fallback
-        return "Unbranded"
+        # Default fallback - use "Generic" instead of "Unbranded"
+        # (some categories reject "Unbranded" for new items)
+        return "Generic"
 
     def map_to_inventory_item(self, amazon_product: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -77,6 +95,8 @@ class ProductMapper:
 
         eBay Inventory Item structure:
         https://developer.ebay.com/api-docs/sell/inventory/types/api:InventoryItem
+
+        Supports optional 'price_multiplier' field in amazon_product (default: 2.0)
         """
         asin = amazon_product.get("asin", "")
         title = amazon_product.get("title", "Untitled Product")
@@ -85,12 +105,15 @@ class ProductMapper:
         images = amazon_product.get("images", [])
         amazon_price_str = amazon_product.get("price", "$0.00")
 
+        # Get price multiplier from product data, default to 2.0
+        price_multiplier = amazon_product.get("price_multiplier", 2.0)
+
         # Generate SKU
         sku = self.generate_sku(asin)
 
         # Parse and calculate price
         amazon_price = self.parse_price(amazon_price_str)
-        ebay_price = self.calculate_ebay_price(amazon_price)
+        ebay_price = self.calculate_ebay_price(amazon_price, multiplier=price_multiplier)
 
         # Build product description
         full_description = self._build_description(
@@ -100,6 +123,7 @@ class ProductMapper:
         # Map to eBay format
         inventory_item = {
             "sku": sku,
+            "locale": "en_US",  # Required for bulk API
             "product": {
                 "title": self._truncate_title(title),
                 "description": full_description,
@@ -133,15 +157,20 @@ class ProductMapper:
 
         Note: Business Policies (payment, return, fulfillment) must be created
         in your eBay account first via Seller Hub.
+
+        Supports optional 'price_multiplier' field in amazon_product (default: 2.0)
         """
         asin = amazon_product.get("asin", "")
         sku = self.generate_sku(asin)
         title = amazon_product.get("title", "Untitled Product")
         amazon_price_str = amazon_product.get("price", "$0.00")
 
+        # Get price multiplier from product data, default to 2.0
+        price_multiplier = amazon_product.get("price_multiplier", 2.0)
+
         # Calculate pricing
         amazon_price = self.parse_price(amazon_price_str)
-        ebay_price = self.calculate_ebay_price(amazon_price)
+        ebay_price = self.calculate_ebay_price(amazon_price, multiplier=price_multiplier)
 
         offer = {
             "sku": sku,

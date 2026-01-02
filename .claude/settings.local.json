@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python final_diagnosis.py:*)",
+      "Bash(ls:*)",
+      "Bash(cd c:\\\\\\\\Users\\\\\\\\31243\\\\\\\\ebay-listing-app && rm -f check_business_policies.py check_inventory.py check_offer.py create_and_publish_offers.py delete_test_offer.py final_diagnosis.py list_all_offers.py publish_existing_offers.py publish_offer_with_retry.py publish_with_package_details.py quick_test.py show_token.py test_oauth.py test_price_multiplier.py test_single_product.py update_and_publish_offer.py:*)",
+      "Bash(rm:*)",
+      "Bash(python diagnose_and_publish.py:*)",
+      "Bash(python check_offer_details.py:*)",
+      "Bash(python:*)"
+    ]
+  }
+}
