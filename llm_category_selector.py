@@ -35,20 +35,19 @@ class LLMCategorySelector:
         Use LLM to select the best category for a product.
 
         Args:
-            product_title: Product title
-            product_description: Product description
-            bullet_points: List of product bullet points
+            product_title: Product title (primary input for category selection)
+            product_description: Product description (not used - title is sufficient)
+            bullet_points: List of product bullet points (not used - title is sufficient)
 
         Returns:
             Tuple of (category_id, category_name, confidence_score)
         """
         logger.info(f"LLM selecting category for: {product_title[:60]}...")
 
-        # Prepare product information
+        # Prepare product information - ONLY use title for category selection
+        # Title is sufficient to determine category, reduces token usage significantly
         product_info = {
-            "title": product_title,
-            "description": product_description[:500] if product_description else "",
-            "bullet_points": bullet_points[:5] if bullet_points else []
+            "title": product_title
         }
 
         # Build simplified category list for LLM (only leaf categories)
@@ -122,15 +121,12 @@ class LLMCategorySelector:
             return self._fallback_category_selection(product_title, product_description)
 
     def _build_category_selection_prompt(self, product_info: Dict, categories: List[Dict]) -> str:
-        """Build prompt for category selection"""
+        """Build prompt for category selection - optimized to use only title"""
         categories_json = json.dumps(categories[:100], indent=2)  # Top 100 to keep prompt size reasonable
 
-        return f"""You are an eBay category selection expert. Select the BEST matching category for this product.
+        return f"""You are an eBay category selection expert. Select the BEST matching category based on the product title.
 
-PRODUCT INFORMATION:
-Title: {product_info['title']}
-Description: {product_info['description']}
-Bullet Points: {json.dumps(product_info['bullet_points'])}
+PRODUCT TITLE: {product_info['title']}
 
 AVAILABLE EBAY CATEGORIES (leaf categories only):
 {categories_json}
@@ -328,7 +324,7 @@ OUTPUT FORMAT (JSON only, no explanations):
             return {}
 
     def _build_requirements_filling_prompt(self, product_data: Dict, required_aspects: List[Dict]) -> str:
-        """Build prompt for filling requirements"""
+        """Build prompt for filling requirements - optimized to use only essential data"""
         aspects_info = []
         for aspect in required_aspects:
             aspect_desc = {
@@ -340,13 +336,16 @@ OUTPUT FORMAT (JSON only, no explanations):
                 aspect_desc['allowed_values'] = aspect['values'][:20]  # Limit for prompt size
             aspects_info.append(aspect_desc)
 
+        # Only use title, description, and bullet points (skip full specifications to save tokens)
+        bullet_points = product_data.get('bulletPoints', [])[:3]  # Only first 3 bullet points
+        description = product_data.get('description', '')[:300]  # Truncate description
+
         return f"""You are filling out required eBay listing fields based on product information.
 
 PRODUCT DATA:
 Title: {product_data.get('title', '')}
-Description: {product_data.get('description', '')[:500]}
-Specifications: {json.dumps(product_data.get('specifications', {}), indent=2)[:500]}
-Bullet Points: {json.dumps(product_data.get('bulletPoints', [])[:5])}
+Description: {description}
+Key Features: {json.dumps(bullet_points)}
 
 REQUIRED ASPECTS TO FILL:
 {json.dumps(aspects_info, indent=2)}

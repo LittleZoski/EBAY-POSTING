@@ -3,6 +3,11 @@
 
 # OAuth tokens (sensitive!)
 ebay_tokens.json
+ebay_tokens_account1.json
+ebay_tokens_account2.json
+
+# Business policies config (replaced by .env)
+business_policies_config.json
 
 # Python
 __pycache__/

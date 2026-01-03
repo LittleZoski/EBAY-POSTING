@@ -36,6 +36,23 @@ class Settings(BaseSettings):
     # Claude API Settings
     anthropic_api_key: str
 
+    # eBay Business Policies - Account 1 (Primary)
+    payment_policy_id: str
+    return_policy_id: str
+    fulfillment_policy_id: str
+
+    # eBay Business Policies - Account 2 (Secondary - Optional)
+    payment_policy_id_account2: str = ""
+    return_policy_id_account2: str = ""
+    fulfillment_policy_id_account2: str = ""
+
+    # Default listing settings
+    default_category_id: str = "11450"
+    default_marketplace: str = "EBAY_US"
+
+    # Active account selection (1 or 2)
+    active_account: int = 1
+
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -53,6 +70,23 @@ class Settings(BaseSettings):
         if self.ebay_environment.upper() == "PRODUCTION":
             return "https://api.ebay.com/identity/v1/oauth2/token"
         return "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
+
+    def get_business_policies(self, account: int = None) -> dict:
+        """Get business policies for the specified account (defaults to active_account)"""
+        account_num = account or self.active_account
+
+        if account_num == 2:
+            return {
+                "payment_policy_id": self.payment_policy_id_account2,
+                "return_policy_id": self.return_policy_id_account2,
+                "fulfillment_policy_id": self.fulfillment_policy_id_account2,
+            }
+        else:
+            return {
+                "payment_policy_id": self.payment_policy_id,
+                "return_policy_id": self.return_policy_id,
+                "fulfillment_policy_id": self.fulfillment_policy_id,
+            }
 
 
 # Initialize settings with helpful error message if .env is missing

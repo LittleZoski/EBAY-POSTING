@@ -13,22 +13,33 @@ from ebay_auth import auth_manager
 logger = logging.getLogger(__name__)
 
 TOKEN_FILE = Path("ebay_tokens.json")
+TOKEN_FILE_ACCOUNT1 = Path("ebay_tokens_account1.json")
+TOKEN_FILE_ACCOUNT2 = Path("ebay_tokens_account2.json")
 
 
 class TokenManager:
     """Manages token persistence and automatic refresh"""
 
-    def load_tokens(self) -> bool:
+    def __init__(self, account: int = 1):
+        """Initialize token manager for a specific account"""
+        self.account = account
+        self.token_file = TOKEN_FILE_ACCOUNT1 if account == 1 else TOKEN_FILE_ACCOUNT2
+
+    def load_tokens(self, account: int = None) -> bool:
         """
         Load tokens from disk if they exist.
         Returns True if valid tokens were loaded, False otherwise.
         """
-        if not TOKEN_FILE.exists():
-            logger.info("No saved tokens found")
+        if account:
+            self.account = account
+            self.token_file = TOKEN_FILE_ACCOUNT1 if account == 1 else TOKEN_FILE_ACCOUNT2
+
+        if not self.token_file.exists():
+            logger.info(f"No saved tokens found for account {self.account}")
             return False
 
         try:
-            with open(TOKEN_FILE, 'r') as f:
+            with open(self.token_file, 'r') as f:
                 data = json.load(f)
 
             # Restore tokens to auth_manager
@@ -38,7 +49,7 @@ class TokenManager:
 
             # Check if access token is still valid
             if auth_manager.token_expiry and time.time() < (auth_manager.token_expiry - 300):
-                logger.info("✅ Loaded valid access token from disk")
+                logger.info(f"✅ Loaded valid access token from disk for account {self.account}")
                 return True
 
             # Access token expired, try to refresh it
@@ -73,10 +84,10 @@ class TokenManager:
                 'saved_at': time.time()
             }
 
-            with open(TOKEN_FILE, 'w') as f:
+            with open(self.token_file, 'w') as f:
                 json.dump(data, f, indent=2)
 
-            logger.info("✅ Tokens saved to disk")
+            logger.info(f"✅ Tokens saved to disk for account {self.account}")
             return True
 
         except Exception as e:
@@ -137,5 +148,10 @@ class TokenManager:
         }
 
 
-# Global token manager instance
-token_manager = TokenManager()
+# Global token manager instances
+token_manager = TokenManager(account=1)  # Default to account 1
+token_manager_account2 = TokenManager(account=2)
+
+def get_token_manager(account: int = 1) -> TokenManager:
+    """Get the token manager for the specified account"""
+    return token_manager if account == 1 else token_manager_account2

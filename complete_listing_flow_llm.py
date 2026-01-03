@@ -8,7 +8,7 @@ import requests
 import logging
 import sys
 from pathlib import Path
-from token_manager import token_manager
+from token_manager import get_token_manager
 from ebay_auth import auth_manager
 from product_mapper import product_mapper
 from llm_category_selector import LLMCategorySelector
@@ -27,21 +27,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load tokens
+# Get active account and token manager
+active_account = settings.active_account
+account_name = f"Account {active_account}" + (" (Primary)" if active_account == 1 else " (Secondary)")
+token_manager = get_token_manager(active_account)
+
+# Load tokens for active account
 if not token_manager.load_tokens():
-    print("ERROR: No OAuth token found!")
+    print(f"ERROR: No OAuth token found for {account_name}!")
+    print(f"Please run: python authorize_account.py {active_account}")
     exit(1)
 
-# Load business policies
-with open("business_policies_config.json", "r") as f:
-    config = json.load(f)
-
-payment_policy_id = config["payment_policy_id"]
-return_policy_id = config["return_policy_id"]
-fulfillment_policy_id = config["fulfillment_policy_id"]
+# Load business policies for active account
+policies = settings.get_business_policies()
+payment_policy_id = policies["payment_policy_id"]
+return_policy_id = policies["return_policy_id"]
+fulfillment_policy_id = policies["fulfillment_policy_id"]
 
 print("\n" + "="*70)
 print("Complete eBay Listing Flow with LLM Category Selection")
+print(f"Active Account: {account_name}")
 print("="*70)
 
 # Initialize LLM category selector
@@ -125,7 +130,30 @@ for idx, product in enumerate(products, 1):
     description = product.get("description", "")
     bullet_points = product.get("bulletPoints", [])
     specifications = product.get("specifications", {})
-    images = product.get("images", [])
+    raw_images = product.get("images", [])
+
+    # Filter out unwanted images
+    images = []
+    for img_url in raw_images:
+        # Skip large resolution variants (_AC_SL1500_)
+        if "_AC_SL1500_" in img_url:
+            continue
+        # Skip play button overlay images (video thumbnails)
+        if "PKdp-play-icon-overlay" in img_url:
+            continue
+        # Skip 360-degree view icons
+        if "360_icon" in img_url:
+            continue
+        images.append(img_url)
+
+    print(f"  Filtered images: {len(raw_images)} -> {len(images)}")
+
+    # If description is empty, create one from bullet points
+    if not description or description.strip() == "":
+        if bullet_points:
+            description = "\n\n".join(bullet_points)
+        else:
+            description = title  # Last resort: use title
 
     print(f"\nProduct: {title[:60]}...")
     print(f"SKU: {sku}")
@@ -200,6 +228,35 @@ for idx, product in enumerate(products, 1):
         else:
             aspects[aspect_name] = [aspect_value]
 
+    # Extract package weight from specifications
+    package_weight = None
+    weight_str = specifications.get("Item Weight", "")
+
+    # Try to parse weight (e.g., "1.96 pounds", "12.3 ounces")
+    if weight_str:
+        import re
+        match = re.search(r'([\d.]+)\s*(pound|lb|ounce|oz)', weight_str.lower())
+        if match:
+            weight_value = float(match.group(1))
+            weight_unit = match.group(2)
+
+            # Convert to pounds if needed
+            if 'oz' in weight_unit or 'ounce' in weight_unit:
+                weight_value = weight_value / 16  # Convert ounces to pounds
+
+            package_weight = {
+                "value": str(round(weight_value, 2)),
+                "unit": "POUND"
+            }
+
+    # If no weight found, use a default (required by eBay)
+    if not package_weight:
+        package_weight = {
+            "value": "1.0",
+            "unit": "POUND"
+        }
+        print(f"  [WARNING] No weight found in specs, using default: 1.0 lb")
+
     inventory_item = {
         "sku": sku,
         "locale": "en_US",
@@ -210,6 +267,9 @@ for idx, product in enumerate(products, 1):
             "aspects": aspects
         },
         "condition": "NEW",
+        "packageWeightAndSize": {
+            "weight": package_weight
+        },
         "availability": {
             "shipToLocationAvailability": {
                 "quantity": 10,

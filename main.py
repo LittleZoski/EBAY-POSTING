@@ -5,8 +5,9 @@ Monitors Downloads folder for Amazon product JSON files and processes them with 
 
 import logging
 import time
+from config import settings
 from file_processor import file_processor
-from token_manager import token_manager
+from token_manager import get_token_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,13 +21,18 @@ def main():
     print("eBay Listing Manager with LLM Category Selection")
     print("="*70)
 
+    # Get the token manager for the active account
+    active_account = settings.active_account
+    account_name = f"Account {active_account}" + (" (Primary)" if active_account == 1 else " (Secondary)")
+    token_manager = get_token_manager(active_account)
+
     # Check OAuth tokens
-    logger.info("Checking OAuth authentication...")
+    logger.info(f"Checking OAuth authentication for {account_name}...")
     if token_manager.load_tokens():
-        logger.info("✅ OAuth authentication ready")
+        logger.info(f"✅ OAuth authentication ready for {account_name}")
     else:
-        logger.warning("⚠️  No valid OAuth token found!")
-        logger.warning("   Please run: python authorize_once.py")
+        logger.warning(f"⚠️  No valid OAuth token found for {account_name}!")
+        logger.warning(f"   Please run: python authorize_account.py {active_account}")
         print("\n" + "="*70)
         return
 
