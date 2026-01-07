@@ -29,6 +29,83 @@ class LLMCategorySelector:
 
         logger.info(f"LLM Category Selector initialized with {len(self.cache.categories)} cached categories")
 
+    def optimize_title_and_select_category(self, product_title: str, product_description: str = "",
+                                           bullet_points: List[str] = None, specifications: Dict = None) -> Tuple[str, str, str, str, float]:
+        """
+        COST-EFFICIENT: Use single LLM call for THREE tasks:
+        1. Optimize title (80 chars max)
+        2. Select category
+        3. Extract brand name
+
+        Args:
+            product_title: Original Amazon product title
+            product_description: Product description
+            bullet_points: List of product bullet points
+            specifications: Product specifications dict
+
+        Returns:
+            Tuple of (optimized_title, brand, category_id, category_name, confidence_score)
+        """
+        logger.info(f"LLM optimizing title and selecting category for: {product_title[:60]}...")
+
+        # Build simplified category list
+        leaf_categories = self._get_leaf_categories()
+
+        # Create combined prompt for title optimization + category selection + brand extraction
+        prompt = self._build_combined_prompt(product_title, product_description, bullet_points, specifications, leaf_categories)
+
+        try:
+            # Single LLM call for THREE tasks (cost-efficient!)
+            response = self.client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=700,
+                temperature=0.3,  # Slight creativity for title optimization
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
+            )
+
+            result_text = response.content[0].text.strip()
+            logger.debug(f"LLM response: {result_text}")
+
+            # Parse response
+            result = json.loads(result_text)
+
+            optimized_title = result.get('optimized_title', product_title)[:80]  # Enforce 80 char limit
+            brand = result.get('brand', 'Generic')
+            category_id = result.get('category_id')
+            reasoning = result.get('reasoning', '')
+
+            # Validate and clean brand
+            brand = self._validate_brand(brand)
+
+            # Validate category exists
+            category_info = self.cache.get_category(category_id)
+            if not category_info:
+                logger.warning(f"LLM selected invalid category {category_id}, using fallback")
+                category_id, category_name, confidence = self._fallback_category_selection(product_title, product_description)
+                # Still use the optimized title and brand
+                return optimized_title, brand, category_id, category_name, confidence
+
+            category_name = category_info['name']
+            confidence = result.get('confidence', 0.7)
+
+            logger.info(f"  Optimized Title: {optimized_title}")
+            logger.info(f"  Extracted Brand: {brand}")
+            logger.info(f"  Selected Category: {category_name} (ID: {category_id})")
+            logger.info(f"  Reasoning: {reasoning}")
+            logger.info(f"  Confidence: {confidence}")
+
+            return optimized_title, brand, category_id, category_name, confidence
+
+        except Exception as e:
+            logger.error(f"LLM optimization failed: {str(e)}")
+            # Fallback: truncate title, use Generic brand, and fallback category
+            truncated_title = product_title[:77] + "..." if len(product_title) > 80 else product_title
+            category_id, category_name, confidence = self._fallback_category_selection(product_title, product_description)
+            return truncated_title, "Generic", category_id, category_name, confidence
+
     def select_category(self, product_title: str, product_description: str = "",
                        bullet_points: List[str] = None) -> Tuple[str, str, float]:
         """
@@ -120,6 +197,84 @@ class LLMCategorySelector:
             logger.error(f"LLM category selection failed: {str(e)}")
             return self._fallback_category_selection(product_title, product_description)
 
+    def _get_leaf_categories(self) -> List[Dict]:
+        """Get optimized list of leaf categories for prompts"""
+        leaf_categories = []
+        for cat_id, cat_data in self.cache.categories.items():
+            if cat_data.get('leaf'):
+                path = self.cache.get_category_path(cat_id)
+                level = cat_data.get('level', 0)
+                if 2 <= level <= 4:
+                    leaf_categories.append({
+                        "id": cat_id,
+                        "name": cat_data['name'],
+                        "path": path,
+                        "level": level
+                    })
+
+        # Sort by level (prefer level 2-3)
+        leaf_categories.sort(key=lambda x: (x['level'], x['name']))
+
+        # Sample across levels
+        level_2 = [c for c in leaf_categories if c['level'] == 2][:100]
+        level_3 = [c for c in leaf_categories if c['level'] == 3][:100]
+        level_4 = [c for c in leaf_categories if c['level'] == 4][:50]
+
+        return level_2 + level_3 + level_4
+
+    def _build_combined_prompt(self, title: str, description: str, bullet_points: List[str], specifications: Dict, categories: List[Dict]) -> str:
+        """Build cost-efficient prompt for THREE tasks: title optimization, brand extraction, AND category selection"""
+        bullet_text = "\n".join(bullet_points[:3]) if bullet_points else "N/A"
+        desc_text = description[:200] if description else "N/A"
+        specs_text = json.dumps(specifications, indent=2) if specifications else "N/A"
+        categories_json = json.dumps(categories[:100], indent=2)
+
+        return f"""You are an eBay listing optimization expert. Perform THREE tasks in ONE response:
+
+TASK 1: EXTRACT BRAND NAME
+- Identify the actual brand/manufacturer from the product data
+- Use context to find the real brand (e.g., in "Waterproof Sony Headphones", brand is "Sony" not "Waterproof")
+- Avoid generic terms like: Custom, Personalized, Handmade, Vintage, New, Unique, etc.
+- If no clear brand exists, use "Generic"
+
+TASK 2: OPTIMIZE TITLE (Max 80 characters)
+- Make it compelling and keyword-rich for eBay search
+- Include brand, key features, and product type
+- Front-load important keywords
+- Use natural language, avoid keyword stuffing
+- MUST be ≤80 characters
+
+TASK 3: SELECT CATEGORY
+- Choose the MOST SPECIFIC matching eBay category
+- Prefer Level 2-3 categories (fewer requirements)
+
+ORIGINAL PRODUCT DATA:
+Title: {title}
+Description: {desc_text}
+Key Features:
+{bullet_text}
+Specifications:
+{specs_text}
+
+AVAILABLE EBAY CATEGORIES (top 100 leaf categories):
+{categories_json}
+
+OPTIMIZATION GUIDELINES:
+1. Brand should be the actual manufacturer/company name
+2. Title should capture buyer intent and eBay search algorithm
+3. Include: Brand + Type + Key Feature + Size/Spec (if relevant)
+4. Remove filler words like "perfect for", "great", etc.
+5. Category should match the product's primary purpose
+
+OUTPUT FORMAT (JSON only, no explanations):
+{{
+  "brand": "extracted brand name or 'Generic'",
+  "optimized_title": "your optimized title here (max 80 chars)",
+  "category_id": "the category ID",
+  "reasoning": "brief 1-sentence explanation for all three decisions",
+  "confidence": 0.0-1.0
+}}"""
+
     def _build_category_selection_prompt(self, product_info: Dict, categories: List[Dict]) -> str:
         """Build prompt for category selection - optimized to use only title"""
         categories_json = json.dumps(categories[:100], indent=2)  # Top 100 to keep prompt size reasonable
@@ -143,6 +298,32 @@ OUTPUT FORMAT (JSON only, no explanations):
   "reasoning": "brief 1-sentence explanation",
   "confidence": 0.0-1.0
 }}"""
+
+    def _validate_brand(self, brand: str) -> str:
+        """
+        Validate and clean brand name extracted by LLM.
+        Ensures brand doesn't contain invalid terms that eBay rejects.
+        """
+        if not brand or not brand.strip():
+            return "Generic"
+
+        brand = brand.strip()
+
+        # Invalid brand names that eBay rejects
+        invalid_brands = {
+            "custom", "personalized", "handmade", "vintage", "unique",
+            "new", "brand", "the", "a", "an", "with", "for", "and",
+            "n/a", "none", "unknown", "generic"
+        }
+
+        if brand.lower() in invalid_brands:
+            return "Generic"
+
+        # If brand is too short (likely an article or filler word)
+        if len(brand) <= 2:
+            return "Generic"
+
+        return brand
 
     def _fallback_category_selection(self, title: str, description: str) -> Tuple[str, str, float]:
         """Fallback to simple keyword matching if LLM fails"""

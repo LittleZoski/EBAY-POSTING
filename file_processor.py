@@ -100,13 +100,14 @@ class FileProcessor:
             script_path = Path(__file__).parent / "complete_listing_flow_llm.py"
 
             # Run as subprocess to avoid import conflicts
+            # Use configurable timeout (default: 30 minutes for large batches)
             result = subprocess.run(
                 [sys.executable, str(script_path)],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=300  # 5 minute timeout
+                timeout=settings.processing_timeout_seconds
             )
 
             # Log output

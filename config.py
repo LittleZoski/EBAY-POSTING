@@ -18,9 +18,18 @@ class Settings(BaseSettings):
     processed_folder: Path = Path("c:/Users/31243/ebay-listing-app/processed")
     failed_folder: Path = Path("c:/Users/31243/ebay-listing-app/failed")
 
-    # Pricing Settings
+    # Pricing Settings - Legacy (kept for backward compatibility)
     price_markup_percentage: float = 20.0
     fixed_markup_amount: float = 5.00
+
+    # Tiered Pricing Strategy Settings
+    tier_1_max_price: float = 20.0
+    tier_1_multiplier: float = 1.85
+    tier_2_max_price: float = 30.0
+    tier_2_multiplier: float = 1.75
+    tier_3_max_price: float = 40.0
+    tier_3_multiplier: float = 1.6
+    tier_4_multiplier: float = 1.5
 
     # eBay Settings
     ebay_site_id: int = 0  # 0=US, 3=UK, 2=Canada
@@ -28,6 +37,7 @@ class Settings(BaseSettings):
     # Batch Settings
     max_items_per_batch: int = 25
     processing_delay_seconds: int = 2
+    processing_timeout_seconds: int = 1800  # 30 minutes default
 
     # Server Settings
     host: str = "0.0.0.0"

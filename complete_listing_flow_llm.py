@@ -125,24 +125,30 @@ for idx, product in enumerate(products, 1):
     print("="*70)
 
     asin = product["asin"]
-    sku = f"AMZN-{asin}"
+    sku = asin
     title = product["title"]
     description = product.get("description", "")
     bullet_points = product.get("bulletPoints", [])
     specifications = product.get("specifications", {})
     raw_images = product.get("images", [])
 
-    # Filter out unwanted images
+    # Filter out unwanted images (UI elements, functional icons, high-res variants, etc.)
     images = []
     for img_url in raw_images:
-        # Skip large resolution variants (_AC_SL1500_)
-        if "_AC_SL1500_" in img_url:
+        # AGGRESSIVE: Skip ANY images with AC_SL pattern (e.g., _AC_SL1000_, _AC_SL1500_)
+        if "_AC_SL" in img_url or "AC_SL" in img_url:
+            continue
+        # Skip UI elements from /images/G/ directory (Amazon UI assets, icons, buttons)
+        if "/images/G/" in img_url or "/G/01/" in img_url:
             continue
         # Skip play button overlay images (video thumbnails)
-        if "PKdp-play-icon-overlay" in img_url:
+        if "PKplay-button" in img_url or "play-icon" in img_url or "play_button" in img_url:
             continue
-        # Skip 360-degree view icons
-        if "360_icon" in img_url:
+        # Skip 360-degree view icons and interactive elements
+        if "360_icon" in img_url or "360-icon" in img_url or "imageBlock" in img_url:
+            continue
+        # Skip transparent pixel placeholders
+        if "transparent-pixel" in img_url or "transparent_pixel" in img_url:
             continue
         images.append(img_url)
 
@@ -158,16 +164,29 @@ for idx, product in enumerate(products, 1):
     print(f"\nProduct: {title[:60]}...")
     print(f"SKU: {sku}")
 
-    # STEP 1: LLM selects category
-    print("\n[Step 1] LLM Category Selection...")
+    # STEP 1: LLM optimizes title, extracts brand AND selects category (single call for efficiency!)
+    print("\n[Step 1] LLM Title Optimization + Brand Extraction + Category Selection...")
     try:
-        category_id, category_name, confidence = category_selector.select_category(
-            title, description, bullet_points
+        optimized_title, brand, category_id, category_name, confidence = category_selector.optimize_title_and_select_category(
+            title, description, bullet_points, specifications
         )
-        print(f"  [OK] Selected: {category_name} (ID: {category_id})")
+        print(f"  [OK] Original: {title[:60]}...")
+        print(f"  [OK] Optimized ({len(optimized_title)} chars): {optimized_title}")
+        print(f"  [OK] Brand: {brand}")
+        print(f"  [OK] Category: {category_name} (ID: {category_id})")
         print(f"  Confidence: {confidence:.2f}")
+
+        # Use optimized title and extracted brand for the listing
+        title = optimized_title
     except Exception as e:
-        print(f"  [ERROR] Category selection failed: {str(e)}")
+        print(f"  [ERROR] Optimization failed: {str(e)}")
+        # Fallback: truncate title if needed
+        if len(title) > 80:
+            title = title[:77] + "..."
+            print(f"  [FALLBACK] Truncated title to: {title}")
+        # Fallback brand
+        brand = "Generic"
+        print(f"  [FALLBACK] Using brand: {brand}")
         continue
 
     # STEP 2: Get category requirements
@@ -204,19 +223,38 @@ for idx, product in enumerate(products, 1):
             print(f"  [WARNING] Could not fill aspects: {str(e)}")
             filled_aspects = {}
 
-    # STEP 4: Calculate price
+    # STEP 4: Calculate price (using tiered pricing strategy + delivery fee)
     print("\n[Step 4] Calculating pricing...")
     amazon_price = product_mapper.parse_price(product.get("price", "$0.00"))
-    multiplier = product.get("price_multiplier", 2.0)
-    ebay_price = product_mapper.calculate_ebay_price(amazon_price, multiplier=multiplier)
-    print(f"  Amazon: ${amazon_price:.2f} -> eBay: ${ebay_price:.2f} ({multiplier}x)")
+    delivery_fee = product_mapper.parse_price(product.get("deliveryFee", "$0.00"))
+
+    # Get optional price_multiplier override from product data
+    # If not provided, calculate_ebay_price will use tiered pricing
+    multiplier = product.get("price_multiplier", None)
+    ebay_price = product_mapper.calculate_ebay_price(amazon_price, delivery_fee=delivery_fee, multiplier=multiplier)
+
+    # Show which multiplier was used and cost breakdown
+    total_amazon_cost = amazon_price + delivery_fee
+    if delivery_fee > 0:
+        print(f"  Amazon Product: ${amazon_price:.2f}")
+        print(f"  Amazon Delivery: ${delivery_fee:.2f}")
+        print(f"  Total Amazon Cost: ${total_amazon_cost:.2f}")
+    else:
+        print(f"  Amazon Cost: ${amazon_price:.2f} (no delivery fee)")
+
+    if multiplier is not None:
+        print(f"  eBay Price: ${ebay_price:.2f} (Override: {multiplier}x)")
+    else:
+        actual_multiplier = product_mapper.get_tiered_multiplier(total_amazon_cost)
+        print(f"  eBay Price: ${ebay_price:.2f} (Tiered: {actual_multiplier}x)")
 
     # STEP 5: Create inventory item
     print("\n[Step 5] Creating inventory item...")
 
     # Build aspects (Brand, MPN, Condition, + category-specific)
+    # Brand was extracted by LLM in Step 1 for cost efficiency
     aspects = {
-        "Brand": [product_mapper.extract_brand(title, description)],
+        "Brand": [brand],
         "MPN": [asin],
         "Condition": ["New"]
     }
