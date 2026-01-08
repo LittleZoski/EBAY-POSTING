@@ -54,7 +54,7 @@ class EbayAuthManager:
         # For now, using client_credentials (limited functionality)
         data = {
             "grant_type": "client_credentials",
-            "scope": "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory"
+            "scope": "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.fulfillment"
         }
 
         try:
@@ -177,11 +177,12 @@ class EbayAuthManager:
         else:
             base_url = "https://auth.sandbox.ebay.com/oauth2/authorize"
 
-        # Request all necessary scopes for listing creation
+        # Request all necessary scopes for listing creation and order fulfillment
         scopes = [
             "https://api.ebay.com/oauth/api_scope/sell.inventory",
             "https://api.ebay.com/oauth/api_scope/sell.account",  # For business policies
-            "https://api.ebay.com/oauth/api_scope/sell.marketing.readonly"  # For offers
+            "https://api.ebay.com/oauth/api_scope/sell.marketing.readonly",  # For offers
+            "https://api.ebay.com/oauth/api_scope/sell.fulfillment"  # For order management
         ]
 
         consent_url = (

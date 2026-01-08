@@ -96,8 +96,13 @@ class FileProcessor:
             # Run the LLM listing flow
             logger.info(f"\nStarting LLM-powered listing flow...")
 
-            # Get path to complete_listing_flow_llm.py
-            script_path = Path(__file__).parent / "complete_listing_flow_llm.py"
+            # Choose between parallel and sequential processing
+            if settings.use_parallel_processing:
+                script_path = Path(__file__).parent / "complete_listing_flow_parallel.py"
+                logger.info(f"Using PARALLEL processing with {settings.max_workers} workers")
+            else:
+                script_path = Path(__file__).parent / "complete_listing_flow_llm.py"
+                logger.info(f"Using SEQUENTIAL processing (original flow)")
 
             # Run as subprocess to avoid import conflicts
             # Use configurable timeout (default: 30 minutes for large batches)

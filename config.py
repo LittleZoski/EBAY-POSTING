@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # Active account selection (1 or 2)
     active_account: int = 1
 
+    # Parallel processing settings
+    max_workers: int = 10
+    use_parallel_processing: bool = True
+
     class Config:
         env_file = ".env"
         case_sensitive = False
