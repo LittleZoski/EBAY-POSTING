@@ -67,9 +67,18 @@ class Settings(BaseSettings):
     max_workers: int = 10
     use_parallel_processing: bool = True
 
+    # Priority category groups (comma-separated group names like beauty_health, electronics)
+    priority_category_groups: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+    def get_priority_category_groups(self) -> list[str]:
+        """Parse priority category groups from comma-separated string"""
+        if not self.priority_category_groups:
+            return []
+        return [group.strip() for group in self.priority_category_groups.split(',') if group.strip()]
 
     @property
     def ebay_api_base_url(self) -> str:

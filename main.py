@@ -5,9 +5,9 @@ Monitors Downloads folder for Amazon product JSON files and processes them with 
 
 import logging
 import time
-from config import settings
 from file_processor import file_processor
 from token_manager import get_token_manager
+from store_selector import confirm_or_select_store, get_store_name
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,9 +21,12 @@ def main():
     print("eBay Listing Manager with LLM Category Selection")
     print("="*70)
 
-    # Get the token manager for the active account
-    active_account = settings.active_account
-    account_name = f"Account {active_account}" + (" (Primary)" if active_account == 1 else " (Secondary)")
+    # Interactive store selection - this will update .env if needed
+    active_account = confirm_or_select_store()
+
+    # Get the token manager for the selected account
+    store_name = get_store_name(active_account)
+    account_name = f"Account {active_account} - {store_name}" + (" (Primary)" if active_account == 1 else " (Secondary)")
     token_manager = get_token_manager(active_account)
 
     # Check OAuth tokens

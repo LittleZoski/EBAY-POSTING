@@ -4,6 +4,7 @@ Uses Claude Haiku for fast, cost-effective category decisions
 """
 import json
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from anthropic import Anthropic
 from config import settings
@@ -28,6 +29,41 @@ class LLMCategorySelector:
         self.cache.initialize()
 
         logger.info(f"LLM Category Selector initialized with {len(self.cache.categories)} cached categories")
+
+    def _load_priority_category_ids(self) -> set:
+        """Load priority category IDs from priority_categories.json based on configured groups"""
+        priority_file = Path("priority_categories.json")
+        if not priority_file.exists():
+            logger.warning("priority_categories.json not found, no priority categories will be used")
+            return set()
+
+        try:
+            with open(priority_file, 'r', encoding='utf-8') as f:
+                priority_data = json.load(f)
+
+            # Get configured groups from settings
+            configured_groups = settings.get_priority_category_groups()
+            if not configured_groups:
+                logger.info("No priority category groups configured in .env")
+                return set()
+
+            # Collect category IDs from all configured groups
+            priority_ids = set()
+            for group_name in configured_groups:
+                if group_name in priority_data:
+                    group_cats = priority_data[group_name].get('categories', [])
+                    for cat in group_cats:
+                        priority_ids.add(cat['id'])
+                    logger.info(f"Loaded {len(group_cats)} priority categories from group '{group_name}'")
+                else:
+                    logger.warning(f"Priority group '{group_name}' not found in priority_categories.json")
+
+            logger.info(f"Total priority categories loaded: {len(priority_ids)}")
+            return priority_ids
+
+        except Exception as e:
+            logger.error(f"Error loading priority categories: {e}")
+            return set()
 
     def optimize_title_and_select_category(self, product_title: str, product_description: str = "",
                                            bullet_points: List[str] = None, specifications: Dict = None) -> Tuple[str, str, str, str, float]:
@@ -198,29 +234,73 @@ class LLMCategorySelector:
             return self._fallback_category_selection(product_title, product_description)
 
     def _get_leaf_categories(self) -> List[Dict]:
-        """Get optimized list of leaf categories for prompts"""
-        leaf_categories = []
+        """
+        Get optimized list of leaf categories with smart sampling.
+
+        Strategy:
+        1. ALWAYS include priority categories from priority_categories.json
+        2. Use stratified sampling across alphabetical ranges (not just A-Z start)
+        3. Target ~300 total categories for better coverage
+        """
+        # Load priority category IDs from JSON file based on configured groups
+        priority_ids = self._load_priority_category_ids()
+
+        # Build full category list
+        all_categories = []
+        priority_categories = []
+
         for cat_id, cat_data in self.cache.categories.items():
-            if cat_data.get('leaf'):
-                path = self.cache.get_category_path(cat_id)
-                level = cat_data.get('level', 0)
-                if 2 <= level <= 4:
-                    leaf_categories.append({
-                        "id": cat_id,
-                        "name": cat_data['name'],
-                        "path": path,
-                        "level": level
-                    })
+            if not cat_data.get('leaf'):
+                continue
 
-        # Sort by level (prefer level 2-3)
-        leaf_categories.sort(key=lambda x: (x['level'], x['name']))
+            level = cat_data.get('level', 0)
+            if level < 2 or level > 4:
+                continue
 
-        # Sample across levels
-        level_2 = [c for c in leaf_categories if c['level'] == 2][:100]
-        level_3 = [c for c in leaf_categories if c['level'] == 3][:100]
-        level_4 = [c for c in leaf_categories if c['level'] == 4][:50]
+            cat_dict = {
+                "id": cat_id,
+                "name": cat_data['name'],
+                "path": self.cache.get_category_path(cat_id),
+                "level": level
+            }
 
-        return level_2 + level_3 + level_4
+            # Separate priority categories
+            if cat_id in priority_ids:
+                priority_categories.append(cat_dict)
+            else:
+                all_categories.append(cat_dict)
+
+        # Group remaining categories by level
+        by_level = {}
+        for cat in all_categories:
+            by_level.setdefault(cat['level'], []).append(cat)
+
+        # Smart sampling: take evenly spaced categories (not alphabetically biased)
+        def stratified_sample(categories: List[Dict], target_count: int) -> List[Dict]:
+            """Take evenly distributed samples across the full list"""
+            if len(categories) <= target_count:
+                return categories
+
+            # Sort alphabetically first
+            sorted_cats = sorted(categories, key=lambda x: x['name'])
+
+            # Take every Nth category to get even distribution
+            step = len(sorted_cats) / target_count
+            return [sorted_cats[int(i * step)] for i in range(target_count)]
+
+        # Sample from each level (increased limits for 300 total)
+        # With ~150 priority categories, we sample ~150 more from general pool
+        level_2_sample = stratified_sample(by_level.get(2, []), 50)   # ~140 total Level 2
+        level_3_sample = stratified_sample(by_level.get(3, []), 70)   # ~2800 total Level 3
+        level_4_sample = stratified_sample(by_level.get(4, []), 30)   # ~6700 total Level 4
+
+        # Combine: priority categories + sampled general categories
+        result = priority_categories + level_2_sample + level_3_sample + level_4_sample
+
+        logger.info(f"Category selection pool: {len(result)} total "
+                   f"({len(priority_categories)} priority + {len(level_2_sample + level_3_sample + level_4_sample)} sampled)")
+
+        return result
 
     def _build_combined_prompt(self, title: str, description: str, bullet_points: List[str], specifications: Dict, categories: List[Dict]) -> str:
         """Build cost-efficient prompt for THREE tasks: title optimization, brand extraction, AND category selection"""
@@ -247,6 +327,9 @@ TASK 2: OPTIMIZE TITLE (Max 80 characters)
 TASK 3: SELECT CATEGORY
 - Choose the MOST SPECIFIC matching eBay category
 - Prefer Level 2-3 categories (fewer requirements)
+- CRITICAL: AVOID Book/Media categories (Books, Music, Movies, etc.) UNLESS the product is clearly a physical book, DVD, or music album
+- For beauty, skincare, health products → use Health & Beauty categories
+- For cosmetics, patches, skincare tools → NOT books!
 
 ORIGINAL PRODUCT DATA:
 Title: {title}
