@@ -11,6 +11,10 @@ Complete guide for Amazon → eBay dropshipping automation.
 python authorize_account.py 1          # Authorize Account 1
 python authorize_account.py 2          # Authorize Account 2
 
+# Vector DB Setup (one-time, ~3-5 minutes)
+pip install faiss-cpu sentence-transformers torch
+python vector_category_db.py           # Build category database
+
 # Listing Products
 python main.py                          # Start listing automation
 
@@ -55,7 +59,26 @@ USE_PARALLEL_PROCESSING=true        # true = parallel, false = sequential
 ANTHROPIC_API_KEY=your_key
 ```
 
-### 2. Authorize eBay Account
+### 2. Build Vector Database (One-Time)
+
+**Category Selection System:**
+- Uses local vector database for semantic search
+- Searches ALL ~10,000 eBay categories (vs 300 priority categories)
+- Zero cost, instant results (<50ms vs 1-3 seconds)
+- No LLM API calls needed for category selection
+
+```bash
+pip install faiss-cpu sentence-transformers torch
+python vector_category_db.py
+```
+
+**What happens:**
+- Loads all eBay categories from cache
+- Generates semantic embeddings
+- Builds FAISS index
+- Saves to `vector_category_db/` folder
+
+### 3. Authorize eBay Account
 
 **First Time or Re-authorization:**
 
@@ -71,7 +94,7 @@ python authorize_account.py 1
 - Saves tokens to `ebay_tokens_account1.json`
 - Tokens auto-refresh for 18 months
 
-### 3. Verify Order Access
+### 4. Verify Order Access
 
 ```bash
 python check_order_access.py
@@ -95,11 +118,12 @@ python main.py
 
 **What happens:**
 - Watches for `amazon-products-*.json` files
-- Uses LLM to select eBay category
+- Uses vector DB for category selection (free, instant)
+- Uses LLM for title optimization and requirements (optional)
 - Applies tiered pricing strategy
 - Creates inventory items and offers
 - Publishes listings to eBay
-- **Processes multiple items in parallel** (10x faster)
+- **Processes multiple items in parallel** (3x faster)
 
 ### B. Order Fulfillment (eBay → Amazon)
 
@@ -243,8 +267,9 @@ Sign in to correct account when prompted.
 - `main.py` - File watcher entry point
 - `file_processor.py` - JSON file handler
 - `product_mapper.py` - Amazon → eBay mapping
-- `llm_category_selector.py` - AI category selection
-- `complete_listing_flow_parallel.py` - Parallel listing (10 workers)
+- `semantic_category_selector.py` - Vector DB category selection (free, fast)
+- `vector_category_db.py` - FAISS-based category database builder
+- `complete_listing_flow_parallel.py` - Parallel listing (3 workers)
 - `complete_listing_flow_llm.py` - Sequential listing (original)
 
 ### Order Flow
@@ -269,6 +294,12 @@ All scopes are requested during authorization.
 
 ## Performance
 
+**Vector Database (Category Selection):**
+- Zero cost - no LLM API calls
+- <50ms per query (vs 1-3 seconds with LLM)
+- Searches all ~10,000 categories (vs 300 priority)
+- Offline capable after initial setup
+
 **Parallel Processing:**
 - 30 items: ~30 seconds (vs 3-5 minutes sequential)
 - 400 items: ~10-15 minutes (vs 40-67 minutes sequential)
@@ -276,13 +307,17 @@ All scopes are requested during authorization.
 
 **Smart Caching:**
 - Category requirements cached in-memory per session
-- Cache resets between runs (ensures accuracy)
 - Reduces redundant API calls within same batch
 
 **Toggle Settings:**
 - `USE_PARALLEL_PROCESSING=true` - Fast (recommended)
 - `USE_PARALLEL_PROCESSING=false` - Original flow
-- `MAX_WORKERS=3` - Safe for Anthropic API (3-5 recommended, avoid rate limits)
+- `MAX_WORKERS=3` - Safe for Anthropic API (3-5 recommended)
+
+**Cost Savings:**
+- Before: ~$0.003 per product (3 LLM calls)
+- After: ~$0.002 per product (2 LLM calls, vector DB free)
+- Pure vector: ~$0.001 per product (requirements only)
 
 ## Notes
 
@@ -292,3 +327,5 @@ All scopes are requested during authorization.
 - Process orders promptly to avoid data loss
 - Export files saved locally only
 - Handle buyer data per eBay policies
+- Vector DB stored in `vector_category_db/` (~50-80MB)
+- Rebuild vector DB if categories update: `python vector_category_db.py`

@@ -11,7 +11,7 @@ from pathlib import Path
 from token_manager import get_token_manager
 from ebay_auth import auth_manager
 from product_mapper import product_mapper
-from llm_category_selector import LLMCategorySelector
+from semantic_category_selector import SemanticCategorySelector
 from config import settings
 
 # Fix Windows console encoding for Unicode
@@ -49,11 +49,11 @@ print("Complete eBay Listing Flow with LLM Category Selection")
 print(f"Active Account: {account_name}")
 print("="*70)
 
-# Initialize LLM category selector
-print("\nInitializing LLM category selector...")
+# Initialize semantic category selector (Vector DB + LLM hybrid)
+print("\nInitializing semantic category selector (Vector DB)...")
 try:
-    category_selector = LLMCategorySelector()
-    print(f"  [OK] Category cache loaded: {len(category_selector.cache.categories)} categories")
+    category_selector = SemanticCategorySelector()
+    print(f"  [OK] Vector DB loaded with semantic search enabled")
 except Exception as e:
     print(f"  [ERROR] Failed to initialize LLM selector: {str(e)}")
     print("  Make sure ANTHROPIC_API_KEY is set in .env file")
@@ -340,8 +340,19 @@ for idx, product in enumerate(products, 1):
         "images": images
     })
 
-    # STEP 7: Create offer
-    print("\n[Step 7] Creating offer...")
+    # STEP 7: Create or update offer
+    print("\n[Step 7] Creating or updating offer...")
+
+    # First, check if an offer already exists for this SKU
+    check_offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer"
+    check_response = requests.get(check_offer_url, headers=headers, params={'sku': sku})
+
+    existing_offer_id = None
+    if check_response.status_code == 200:
+        existing_offers = check_response.json().get('offers', [])
+        if existing_offers:
+            existing_offer_id = existing_offers[0].get('offerId')
+            print(f"  Found existing offer (ID: {existing_offer_id}), will update it")
 
     offer = {
         "sku": sku,
@@ -364,12 +375,20 @@ for idx, product in enumerate(products, 1):
         "merchantLocationKey": location_key
     }
 
-    offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer"
-    response = requests.post(offer_url, headers=headers, json=offer)
+    if existing_offer_id:
+        # Update existing offer
+        offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer/{existing_offer_id}"
+        response = requests.put(offer_url, headers=headers, json=offer)
+        offer_id = existing_offer_id
+    else:
+        # Create new offer
+        offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer"
+        response = requests.post(offer_url, headers=headers, json=offer)
 
-    if response.status_code in [200, 201]:
-        offer_id = response.json().get("offerId")
-        print(f"  [OK] Offer created (ID: {offer_id})")
+    if response.status_code in [200, 201, 204]:
+        if not existing_offer_id:
+            offer_id = response.json().get("offerId")
+        print(f"  [OK] Offer {'updated' if existing_offer_id else 'created'} (ID: {offer_id})")
     else:
         print(f"  [ERROR] {response.text}")
         results.append({'sku': sku, 'status': 'failed', 'stage': 'offer', 'error': response.text})

@@ -22,6 +22,7 @@ ENV/
 # Processing folders
 processed/
 failed/
+ebay_orders/
 
 # IDE
 .vscode/
@@ -32,6 +33,7 @@ failed/
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Logs
 *.log

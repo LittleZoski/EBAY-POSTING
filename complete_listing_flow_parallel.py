@@ -23,7 +23,7 @@ from typing import Dict, List, Tuple, Optional
 from token_manager import get_token_manager
 from ebay_auth import auth_manager
 from product_mapper import product_mapper
-from llm_category_selector import LLMCategorySelector
+from semantic_category_selector import SemanticCategorySelector
 from config import settings
 
 # Fix Windows console encoding for Unicode
@@ -153,11 +153,11 @@ class ParallelListingProcessor:
         print(f"Max Workers: {self.max_workers}")
         print("="*70)
 
-        # Initialize LLM category selector
-        print("\nInitializing LLM category selector...")
+        # Initialize semantic category selector (Vector DB + LLM hybrid)
+        print("\nInitializing semantic category selector (Vector DB)...")
         try:
-            self.category_selector = LLMCategorySelector()
-            print(f"  [OK] Category cache loaded: {len(self.category_selector.cache.categories)} categories")
+            self.category_selector = SemanticCategorySelector()
+            print(f"  [OK] Vector DB loaded with semantic search enabled")
         except Exception as e:
             print(f"  [ERROR] Failed to initialize LLM selector: {str(e)}")
             raise
@@ -318,8 +318,8 @@ class ParallelListingProcessor:
         print(f"SKU: {sku}")
 
         try:
-            # STEP 1: LLM optimizes title, extracts brand AND selects category
-            print("\n[Step 1] LLM Title Optimization + Brand Extraction + Category Selection...")
+            # STEP 1: Vector DB selects category + LLM optimizes title & extracts brand
+            print("\n[Step 1] Vector DB Category Selection + LLM Title Optimization...")
             optimized_title, brand, category_id, category_name, confidence = self.category_selector.optimize_title_and_select_category(
                 title, description, bullet_points, specifications
             )
@@ -327,7 +327,7 @@ class ParallelListingProcessor:
             print(f"  [OK] Optimized ({len(optimized_title)} chars): {optimized_title}")
             print(f"  [OK] Brand: {brand}")
             print(f"  [OK] Category: {category_name} (ID: {category_id})")
-            print(f"  Confidence: {confidence:.2f}")
+            print(f"  [OK] Similarity: {confidence:.3f}")
 
             title = optimized_title
 
@@ -478,8 +478,19 @@ class ParallelListingProcessor:
             "images": images
         })
 
-        # STEP 7: Create offer
-        print("\n[Step 7] Creating offer...")
+        # STEP 7: Create or update offer
+        print("\n[Step 7] Creating or updating offer...")
+
+        # First, check if an offer already exists for this SKU
+        check_offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer"
+        check_response = self._make_request('GET', check_offer_url, params={'sku': sku})
+
+        existing_offer_id = None
+        if check_response.status_code == 200:
+            existing_offers = check_response.json().get('offers', [])
+            if existing_offers:
+                existing_offer_id = existing_offers[0].get('offerId')
+                print(f"  Found existing offer (ID: {existing_offer_id}), will update it")
 
         offer = {
             "sku": sku,
@@ -502,12 +513,20 @@ class ParallelListingProcessor:
             "merchantLocationKey": self.location_key
         }
 
-        offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer"
-        response = self._make_request('POST', offer_url, json=offer)
+        if existing_offer_id:
+            # Update existing offer
+            offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer/{existing_offer_id}"
+            response = self._make_request('PUT', offer_url, json=offer)
+            offer_id = existing_offer_id
+        else:
+            # Create new offer
+            offer_url = f"{settings.ebay_api_base_url}/sell/inventory/v1/offer"
+            response = self._make_request('POST', offer_url, json=offer)
 
-        if response.status_code in [200, 201]:
-            offer_id = response.json().get("offerId")
-            print(f"  [OK] Offer created (ID: {offer_id})")
+        if response.status_code in [200, 201, 204]:
+            if not existing_offer_id:
+                offer_id = response.json().get("offerId")
+            print(f"  [OK] Offer {'updated' if existing_offer_id else 'created'} (ID: {offer_id})")
         else:
             print(f"  [ERROR] {response.text}")
             return {'sku': sku, 'status': 'failed', 'stage': 'offer', 'error': response.text}

@@ -67,7 +67,8 @@ class Settings(BaseSettings):
     max_workers: int = 10
     use_parallel_processing: bool = True
 
-    # Priority category groups (comma-separated group names like beauty_health, electronics)
+    # DEPRECATED: Priority category groups - no longer needed with vector DB
+    # The vector DB searches all categories automatically
     priority_category_groups: str = ""
 
     class Config:
@@ -75,7 +76,11 @@ class Settings(BaseSettings):
         case_sensitive = False
 
     def get_priority_category_groups(self) -> list[str]:
-        """Parse priority category groups from comma-separated string"""
+        """
+        DEPRECATED: Parse priority category groups from comma-separated string
+        This is no longer used - vector DB searches all categories automatically
+        Kept for backward compatibility only
+        """
         if not self.priority_category_groups:
             return []
         return [group.strip() for group in self.priority_category_groups.split(',') if group.strip()]
