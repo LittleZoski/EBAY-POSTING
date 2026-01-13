@@ -39,19 +39,19 @@ def main():
         print("\n" + "="*70)
         return
 
-    # Start file watcher
+    # Start file watcher (this also starts the queue worker)
     file_processor.start_watching()
 
-    # Process any existing files in the watch folder
+    # Process any existing files in the watch folder by adding them to the queue
     from pathlib import Path
     watch_folder = Path(file_processor.watch_folder)
     existing_files = list(watch_folder.glob("amazon-products-*.json"))
 
     if existing_files:
-        logger.info(f"\nFound {len(existing_files)} existing file(s) in watch folder. Processing...")
+        logger.info(f"\nFound {len(existing_files)} existing file(s) in watch folder.")
+        logger.info(f"Adding them to processing queue...")
         for file_path in existing_files:
-            logger.info(f"Processing existing file: {file_path.name}")
-            file_processor.process_file(file_path)
+            file_processor.add_to_queue(file_path)
 
     # Keep the script running
     try:

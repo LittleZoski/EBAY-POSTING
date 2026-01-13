@@ -12,6 +12,8 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from config import settings
 import logging
+import queue
+import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,14 +45,8 @@ class AmazonProductFileHandler(FileSystemEventHandler):
                 logger.warning(f"File no longer exists: {file_path.name}")
                 return
 
-            # Process in a separate thread to avoid blocking the file watcher
-            import threading
-            thread = threading.Thread(
-                target=self.processor.process_file,
-                args=(file_path,)
-            )
-            thread.daemon = True
-            thread.start()
+            # Add file to processing queue
+            self.processor.add_to_queue(file_path)
 
 
 class FileProcessor:
@@ -61,6 +57,15 @@ class FileProcessor:
         self.processed_folder = settings.processed_folder
         self.failed_folder = settings.failed_folder
         self.observer = None
+
+        # Queue for files waiting to be processed
+        self.file_queue = queue.Queue()
+        self.processing_lock = threading.Lock()
+        self.is_processing = False
+        self.should_stop = False
+
+        # Worker thread for processing files from queue
+        self.worker_thread = None
 
         # Create folders if they don't exist
         self.watch_folder.mkdir(parents=True, exist_ok=True)
@@ -147,8 +152,62 @@ class FileProcessor:
             except Exception as move_error:
                 logger.error(f"Could not move to failed folder: {move_error}")
 
+    def add_to_queue(self, file_path: Path):
+        """Add a file to the processing queue"""
+        self.file_queue.put(file_path)
+        queue_size = self.file_queue.qsize()
+        logger.info(f"✅ Added to queue: {file_path.name}")
+        logger.info(f"📋 Queue status: {queue_size} file(s) waiting")
+
+        if queue_size > 1:
+            logger.info(f"⏳ File will be processed after {queue_size - 1} other file(s)")
+
+    def queue_worker(self):
+        """Worker thread that processes files from the queue one at a time"""
+        logger.info("🔧 Queue worker thread started")
+
+        while not self.should_stop:
+            try:
+                # Wait for a file to be available in the queue (with timeout for graceful shutdown)
+                try:
+                    file_path = self.file_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+
+                # Mark as processing
+                with self.processing_lock:
+                    self.is_processing = True
+
+                remaining = self.file_queue.qsize()
+                logger.info(f"\n🚀 Starting processing: {file_path.name}")
+                if remaining > 0:
+                    logger.info(f"📋 Files remaining in queue: {remaining}")
+
+                # Process the file
+                self.process_file(file_path)
+
+                # Mark as done and not processing
+                self.file_queue.task_done()
+                with self.processing_lock:
+                    self.is_processing = False
+
+                logger.info(f"✅ Completed: {file_path.name}")
+
+            except Exception as e:
+                logger.error(f"❌ Worker error: {str(e)}")
+                with self.processing_lock:
+                    self.is_processing = False
+
+        logger.info("🔧 Queue worker thread stopped")
+
     def start_watching(self):
         """Start watching the folder for new files"""
+        # Start the queue worker thread
+        self.should_stop = False
+        self.worker_thread = threading.Thread(target=self.queue_worker, daemon=True)
+        self.worker_thread.start()
+
+        # Start file system watcher
         event_handler = AmazonProductFileHandler(self)
         self.observer = Observer()
         self.observer.schedule(event_handler, str(self.watch_folder), recursive=False)
@@ -159,14 +218,38 @@ class FileProcessor:
         logger.info(f"{'='*70}")
         logger.info(f"Watching: {self.watch_folder}")
         logger.info(f"Waiting for Amazon product JSON files...")
+        logger.info(f"Mode: Queue-based processing (one file at a time)")
         logger.info(f"{'='*70}\n")
 
     def stop_watching(self):
         """Stop watching the folder"""
+        logger.info("Stopping file watcher...")
+
+        # Stop file system observer
         if self.observer:
             self.observer.stop()
             self.observer.join()
-            logger.info("File watcher stopped")
+            logger.info("File system watcher stopped")
+
+        # Signal worker thread to stop
+        self.should_stop = True
+
+        # Wait for current processing to complete
+        if self.worker_thread and self.worker_thread.is_alive():
+            logger.info("Waiting for worker thread to finish current task...")
+            self.worker_thread.join(timeout=10)  # Wait up to 10 seconds
+
+            if self.worker_thread.is_alive():
+                logger.warning("Worker thread did not stop gracefully")
+            else:
+                logger.info("Worker thread stopped")
+
+        # Report any remaining items in queue
+        remaining = self.file_queue.qsize()
+        if remaining > 0:
+            logger.warning(f"⚠️  {remaining} file(s) were still in queue")
+
+        logger.info("File watcher stopped completely")
 
 
 # Global processor instance
