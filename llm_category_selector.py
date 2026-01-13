@@ -108,7 +108,13 @@ class LLMCategorySelector:
             # Parse response
             result = json.loads(result_text)
 
-            optimized_title = result.get('optimized_title', product_title)[:80]  # Enforce 80 char limit
+            # Get optimized title and enforce 80 char limit with smart truncation
+            optimized_title = result.get('optimized_title', product_title)
+            if len(optimized_title) > 80:
+                # Smart truncate: break at word boundary, not mid-word
+                optimized_title = self._smart_truncate_title(optimized_title, 80)
+                logger.warning(f"  Title exceeded 80 chars, truncated to: {optimized_title}")
+
             brand = result.get('brand', 'Generic')
             category_id = result.get('category_id')
             reasoning = result.get('reasoning', '')
@@ -313,6 +319,7 @@ class LLMCategorySelector:
 
 TASK 1: EXTRACT BRAND NAME
 - Identify the actual brand/manufacturer from the product data
+- Check specifications for: "Brand", "Brand Name", "BrandName", "Manufacturer" fields
 - Use context to find the real brand (e.g., in "Waterproof Sony Headphones", brand is "Sony" not "Waterproof")
 - Avoid generic terms like: Custom, Personalized, Handmade, Vintage, New, Unique, etc.
 - If no clear brand exists, use "Generic"
@@ -381,6 +388,31 @@ OUTPUT FORMAT (JSON only, no explanations):
   "reasoning": "brief 1-sentence explanation",
   "confidence": 0.0-1.0
 }}"""
+
+    def _smart_truncate_title(self, title: str, max_length: int = 80) -> str:
+        """
+        Smart truncate title to max_length, breaking at word boundaries.
+
+        Args:
+            title: Title to truncate
+            max_length: Maximum length (default 80 for eBay)
+
+        Returns:
+            Truncated title that ends at a word boundary
+        """
+        if len(title) <= max_length:
+            return title
+
+        # Find the last space before max_length
+        truncated = title[:max_length]
+        last_space = truncated.rfind(' ')
+
+        if last_space > 0:
+            # Truncate at last word boundary
+            return title[:last_space].strip()
+        else:
+            # No space found, hard truncate (rare case)
+            return title[:max_length].strip()
 
     def _validate_brand(self, brand: str) -> str:
         """
@@ -501,32 +533,37 @@ OUTPUT FORMAT (JSON only, no explanations):
             logger.error(f"Exception fetching requirements: {str(e)}")
             return {'required': [], 'recommended': [], 'optional': []}
 
-    def fill_category_requirements(self, product_data: Dict, requirements: Dict) -> Dict:
+    def fill_category_requirements(self, product_data: Dict, requirements: Dict, include_recommended: bool = False) -> Dict:
         """
-        Use LLM to fill required category-specific fields from product data.
+        Use LLM to fill required (and optionally recommended) category-specific fields from product data.
 
         Args:
             product_data: Product information (title, description, specs, etc.)
             requirements: Category requirements from get_category_requirements()
+            include_recommended: If True, also fill recommended aspects in the same LLM call
 
         Returns:
             Dict of aspect_name -> value mappings
         """
         required = requirements.get('required', [])
+        recommended = requirements.get('recommended', []) if include_recommended else []
 
-        if not required:
-            logger.info("No required aspects to fill")
+        if not required and not recommended:
+            logger.info("No aspects to fill")
             return {}
 
-        logger.info(f"LLM filling {len(required)} required aspects...")
+        total_aspects = len(required) + len(recommended)
+        logger.info(f"LLM filling {len(required)} required + {len(recommended)} recommended aspects (total: {total_aspects})...")
 
-        # Build prompt
-        prompt = self._build_requirements_filling_prompt(product_data, required)
+        # Build prompt with both required and recommended aspects
+        prompt = self._build_requirements_filling_prompt(product_data, required, recommended)
 
         try:
+            # Generous max_tokens to handle many aspects (required + recommended)
+            # Categories can have 10-20+ aspects combined, each needing thoughtful extraction
             response = self.client.messages.create(
                 model="claude-3-haiku-20240307",
-                max_tokens=1000,
+                max_tokens=3000,  # Increased to ensure complete responses for aspect-heavy categories
                 temperature=0,
                 messages=[{
                     "role": "user",
@@ -536,6 +573,11 @@ OUTPUT FORMAT (JSON only, no explanations):
 
             result_text = response.content[0].text.strip()
             logger.debug(f"LLM requirements response: {result_text}")
+
+            # Check if we hit the token limit (response might be truncated)
+            if response.stop_reason == "max_tokens":
+                logger.warning(f"LLM response hit max_tokens limit! Response may be incomplete.")
+                logger.warning(f"Consider increasing max_tokens or filtering more recommended aspects.")
 
             # Extract JSON from response (handle markdown code blocks)
             if "```json" in result_text:
@@ -573,7 +615,19 @@ OUTPUT FORMAT (JSON only, no explanations):
             # Parse JSON response
             filled_aspects = json.loads(result_text)
 
-            logger.info(f"  Filled aspects: {list(filled_aspects.keys())}")
+            # CRITICAL: Validate and truncate aspect values to eBay's 65-character limit
+            filled_aspects = self._validate_and_truncate_aspects(filled_aspects)
+
+            # Log which aspects were filled
+            required_names = {a['name'] for a in required}
+            recommended_names = {a['name'] for a in recommended}
+
+            filled_required = [k for k in filled_aspects.keys() if k in required_names]
+            filled_recommended = [k for k in filled_aspects.keys() if k in recommended_names]
+
+            logger.info(f"  Filled {len(filled_required)} required aspects: {filled_required}")
+            if filled_recommended:
+                logger.info(f"  Filled {len(filled_recommended)} recommended aspects: {filled_recommended}")
 
             return filled_aspects
 
@@ -587,39 +641,159 @@ OUTPUT FORMAT (JSON only, no explanations):
             # Return empty dict - will let eBay validation handle it
             return {}
 
-    def _build_requirements_filling_prompt(self, product_data: Dict, required_aspects: List[Dict]) -> str:
+    def _validate_and_truncate_aspects(self, aspects: Dict) -> Dict:
+        """
+        Validate and truncate aspect values to meet eBay's 65-character limit.
+
+        eBay enforces a strict 65-character maximum for aspect values.
+        This method intelligently truncates long values while preserving meaning.
+
+        Args:
+            aspects: Dict of aspect_name -> value mappings
+
+        Returns:
+            Dict with validated and truncated values
+        """
+        MAX_LENGTH = 65
+        validated = {}
+
+        for aspect_name, aspect_value in aspects.items():
+            if isinstance(aspect_value, list):
+                # Handle multi-value aspects (cardinality: MULTI)
+                truncated_list = []
+                for val in aspect_value:
+                    if isinstance(val, str) and len(val) > MAX_LENGTH:
+                        truncated = self._smart_truncate(val, MAX_LENGTH)
+                        logger.warning(f"  Truncated '{aspect_name}' value: '{val[:80]}...' -> '{truncated}'")
+                        truncated_list.append(truncated)
+                    else:
+                        truncated_list.append(val)
+                validated[aspect_name] = truncated_list
+            elif isinstance(aspect_value, str):
+                # Handle single-value aspects (cardinality: SINGLE)
+                if len(aspect_value) > MAX_LENGTH:
+                    truncated = self._smart_truncate(aspect_value, MAX_LENGTH)
+                    logger.warning(f"  Truncated '{aspect_name}' value: '{aspect_value[:80]}...' -> '{truncated}'")
+                    validated[aspect_name] = truncated
+                else:
+                    validated[aspect_name] = aspect_value
+            else:
+                # Handle non-string values (numbers, etc.)
+                validated[aspect_name] = aspect_value
+
+        return validated
+
+    def _smart_truncate(self, text: str, max_length: int) -> str:
+        """
+        Intelligently truncate text to max_length while preserving meaning.
+
+        Strategy:
+        1. Try to break at sentence/phrase boundaries (period, comma, semicolon)
+        2. Try to break at word boundaries
+        3. As last resort, hard truncate with ellipsis
+
+        Args:
+            text: Text to truncate
+            max_length: Maximum length (default 65 for eBay aspects)
+
+        Returns:
+            Truncated text that fits within max_length
+        """
+        if len(text) <= max_length:
+            return text
+
+        # Strategy 1: Try to extract the first complete sentence/phrase
+        # Look for sentence boundaries (period, colon, semicolon) within first max_length chars
+        truncate_at = max_length - 3  # Reserve 3 chars for "..."
+
+        for delimiter in ['. ', ': ', '; ', ', ']:
+            pos = text[:truncate_at].rfind(delimiter)
+            if pos > max_length // 2:  # Only use if we get at least half the text
+                return text[:pos].strip()
+
+        # Strategy 2: Break at word boundary
+        if ' ' in text[:truncate_at]:
+            last_space = text[:truncate_at].rfind(' ')
+            return text[:last_space].strip() + "..."
+
+        # Strategy 3: Hard truncate (last resort)
+        return text[:truncate_at].strip() + "..."
+
+    def _build_requirements_filling_prompt(self, product_data: Dict, required_aspects: List[Dict], recommended_aspects: List[Dict] = None) -> str:
         """Build prompt for filling requirements - optimized to use only essential data"""
-        aspects_info = []
+        if recommended_aspects is None:
+            recommended_aspects = []
+
+        # Process required aspects (MUST fill these)
+        required_info = []
         for aspect in required_aspects:
             aspect_desc = {
                 'name': aspect['name'],
                 'mode': aspect['mode'],
-                'cardinality': aspect['cardinality']
+                'cardinality': aspect['cardinality'],
+                'priority': 'REQUIRED'
             }
             if aspect.get('values') and aspect['mode'] != 'FREE_TEXT':
                 aspect_desc['allowed_values'] = aspect['values'][:20]  # Limit for prompt size
-            aspects_info.append(aspect_desc)
+            required_info.append(aspect_desc)
+
+        # Process recommended aspects (fill if possible, skip if not applicable)
+        recommended_info = []
+        for aspect in recommended_aspects:
+            # Filter out recommended aspects with too many values (usually generic/less relevant)
+            aspect_values = aspect.get('values', [])
+            if aspect['mode'] != 'FREE_TEXT' and len(aspect_values) > 50:
+                continue  # Skip aspects with 50+ values to save tokens
+
+            aspect_desc = {
+                'name': aspect['name'],
+                'mode': aspect['mode'],
+                'cardinality': aspect['cardinality'],
+                'priority': 'RECOMMENDED'
+            }
+            if aspect_values and aspect['mode'] != 'FREE_TEXT':
+                aspect_desc['allowed_values'] = aspect_values[:30]  # More values for recommended
+            recommended_info.append(aspect_desc)
+
+        all_aspects = required_info + recommended_info
 
         # Only use title, description, and bullet points (skip full specifications to save tokens)
-        bullet_points = product_data.get('bulletPoints', [])[:3]  # Only first 3 bullet points
-        description = product_data.get('description', '')[:300]  # Truncate description
+        bullet_points = product_data.get('bulletPoints', [])[:5]  # Increased to 5 for better extraction
+        description = product_data.get('description', '')[:500]  # Increased to 500 for better context
 
-        return f"""You are filling out required eBay listing fields based on product information.
+        return f"""You are filling out eBay listing fields based on product information.
 
 PRODUCT DATA:
 Title: {product_data.get('title', '')}
 Description: {description}
 Key Features: {json.dumps(bullet_points)}
 
-REQUIRED ASPECTS TO FILL:
-{json.dumps(aspects_info, indent=2)}
+ASPECTS TO FILL:
+{json.dumps(all_aspects, indent=2)}
 
 INSTRUCTIONS:
-1. Extract appropriate values from product data for each required aspect
-2. If mode is SELECTION_ONLY, MUST use one of the allowed_values
-3. If mode is FREE_TEXT, extract from product information
-4. If cardinality is MULTI, return array. If SINGLE, return string
-5. If information not available, use best reasonable default
+1. For REQUIRED aspects: MUST provide values, use best reasonable default if not found
+2. For RECOMMENDED aspects: Only fill if information is clearly available in product data
+3. If mode is SELECTION_ONLY, MUST choose from allowed_values (case-sensitive match)
+4. If mode is FREE_TEXT, extract relevant information from product data
+5. If cardinality is MULTI, return array; if SINGLE, return string or single value
+6. Skip RECOMMENDED aspects if product data doesn't clearly provide the information
+
+CRITICAL - CHARACTER LIMIT:
+- ALL aspect values MUST be ≤65 characters (eBay hard limit)
+- Be concise: extract key information only, remove filler words
+- Examples:
+  * BAD (128 chars): "SAFE AND GENTLE: The spray is made with plant extracts and contains no alcohol or harsh chemicals. It's suitable for both puppies and adults."
+  * GOOD (62 chars): "Made with plant extracts, no alcohol, safe for puppies/adults"
+  * BAD (101 chars): "Apply the ear mite drops daily for 7 to 10 days, if necessary, repeat treatment in two weeks."
+  * GOOD (49 chars): "Apply daily for 7-10 days, repeat after 2 weeks"
+
+QUALITY GUIDELINES:
+- Prefer specific values over generic ones (e.g., "Stainless Steel" better than "Metal")
+- For colors, materials, sizes: extract from title/bullets first, then description
+- Don't guess or infer beyond what's explicitly stated
+- For RECOMMENDED aspects, it's better to skip than provide uncertain values
+- Keep all values concise and under 65 characters
 
 OUTPUT FORMAT (JSON only):
 {{

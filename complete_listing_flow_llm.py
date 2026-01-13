@@ -194,20 +194,28 @@ for idx, product in enumerate(products, 1):
     try:
         requirements = category_selector.get_category_requirements(category_id)
         required_count = len(requirements.get('required', []))
-        print(f"  [OK] Found {required_count} required aspects")
+        recommended_count = len(requirements.get('recommended', []))
+        print(f"  [OK] Found {required_count} required, {recommended_count} recommended aspects")
 
         if required_count > 0:
             print(f"  Required aspects:")
             for aspect in requirements['required']:
                 print(f"    - {aspect['name']} ({aspect['mode']}, {aspect['cardinality']})")
+
+        if recommended_count > 0:
+            print(f"  Recommended aspects (will enhance listing visibility):")
+            for aspect in requirements['recommended'][:5]:  # Show first 5
+                print(f"    - {aspect['name']} ({aspect['mode']}, {aspect['cardinality']})")
+            if recommended_count > 5:
+                print(f"    ... and {recommended_count - 5} more")
     except Exception as e:
         print(f"  [WARNING] Could not fetch requirements: {str(e)}")
         requirements = {'required': [], 'recommended': [], 'optional': []}
 
-    # STEP 3: LLM fills required aspects
+    # STEP 3: LLM fills required + recommended aspects (in single call)
     filled_aspects = {}
-    if requirements.get('required'):
-        print("\n[Step 3] LLM filling required aspects...")
+    if requirements.get('required') or requirements.get('recommended'):
+        print("\n[Step 3] LLM filling required + recommended aspects...")
         try:
             product_data = {
                 'title': title,
@@ -215,8 +223,13 @@ for idx, product in enumerate(products, 1):
                 'bulletPoints': bullet_points,
                 'specifications': specifications
             }
-            filled_aspects = category_selector.fill_category_requirements(product_data, requirements)
-            print(f"  [OK] Filled {len(filled_aspects)} aspects")
+            # Enhanced call: include_recommended=True to fill both required and recommended in one LLM call
+            filled_aspects = category_selector.fill_category_requirements(
+                product_data,
+                requirements,
+                include_recommended=True
+            )
+            print(f"  [OK] Filled {len(filled_aspects)} aspects total")
             for name, value in filled_aspects.items():
                 print(f"    - {name}: {value}")
         except Exception as e:
@@ -260,7 +273,21 @@ for idx, product in enumerate(products, 1):
     }
 
     # Add filled category-specific aspects
+    # CRITICAL: Don't overwrite Brand/MPN/Condition that we already set above
+    # The LLM might return these as required aspects, but we've already handled them
+    protected_aspects = {"Brand", "MPN", "Condition"}
+
     for aspect_name, aspect_value in filled_aspects.items():
+        # Skip if this aspect is already set (Brand, MPN, Condition)
+        if aspect_name in protected_aspects:
+            print(f"  [SKIP] Aspect '{aspect_name}' already set, not overwriting")
+            continue
+
+        # Skip if value is None or empty
+        if aspect_value is None or (isinstance(aspect_value, str) and not aspect_value.strip()):
+            print(f"  [SKIP] Aspect '{aspect_name}' has empty value from LLM")
+            continue
+
         if isinstance(aspect_value, list):
             aspects[aspect_name] = aspect_value
         else:
@@ -299,7 +326,7 @@ for idx, product in enumerate(products, 1):
         "sku": sku,
         "locale": "en_US",
         "product": {
-            "title": title[:80],
+            "title": title,  # Already optimized to ≤80 chars by LLM with smart truncation
             "description": description,
             "imageUrls": images[:12],  # eBay limit
             "aspects": aspects

@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     max_workers: int = 10
     use_parallel_processing: bool = True
 
+    # Category selection settings
+    category_candidates_top_k: int = 3  # Number of category candidates to show LLM (default: 3 for lower cost)
+
     # DEPRECATED: Priority category groups - no longer needed with vector DB
     # The vector DB searches all categories automatically
     priority_category_groups: str = ""
