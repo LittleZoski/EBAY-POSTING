@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     tier_3_multiplier: float = 1.6
     tier_4_multiplier: float = 1.5
 
+    # Charm Pricing Strategy
+    # Options: "always_99", "always_49", "tiered"
+    charm_pricing_strategy: str = "always_99"
+
     # eBay Settings
     ebay_site_id: int = 0  # 0=US, 3=UK, 2=Canada
 

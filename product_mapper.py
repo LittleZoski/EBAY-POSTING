@@ -26,6 +26,9 @@ class ProductMapper:
         self.tier_3_multiplier = settings.tier_3_multiplier
         self.tier_4_multiplier = settings.tier_4_multiplier
 
+        # Charm pricing strategy
+        self.charm_pricing_strategy = settings.charm_pricing_strategy
+
     def parse_price(self, price_str: str) -> float:
         """
         Extract numeric price from Amazon price string.
@@ -67,13 +70,55 @@ class ProductMapper:
         else:
             return self.tier_4_multiplier
 
+    def apply_charm_pricing(self, price: float) -> float:
+        """
+        Apply charm pricing strategy to make prices more psychologically appealing.
+
+        Strategies:
+        - always_99: Round to .99 (e.g., $23.67 -> $23.99)
+        - always_49: Round to .49 (e.g., $23.67 -> $23.49)
+        - tiered: Under $20 use .99, $20+ use .95
+
+        Args:
+            price: The calculated price before charm pricing
+
+        Returns:
+            float: Price with charm pricing applied
+        """
+        if price <= 0:
+            return 0.0
+
+        # Get the dollar amount (integer part)
+        dollar_amount = int(price)
+
+        # Apply strategy
+        if self.charm_pricing_strategy == "always_99":
+            # Always end in .99
+            return dollar_amount + 0.99
+
+        elif self.charm_pricing_strategy == "always_49":
+            # Always end in .49
+            return dollar_amount + 0.49
+
+        elif self.charm_pricing_strategy == "tiered":
+            # Under $20 use .99 (impulse buys), $20+ use .95 (quality signal)
+            if price < 20:
+                return dollar_amount + 0.99
+            else:
+                return dollar_amount + 0.95
+
+        else:
+            # Unknown strategy, return original rounded price
+            return round(price, 2)
+
     def calculate_ebay_price(self, amazon_price: float, delivery_fee: float = 0.0, multiplier: float = None) -> float:
         """
         Calculate eBay listing price with multiplier or markup, including delivery fee.
 
         Calculation flow:
         1. Apply tiered multiplier to (product price + delivery fee)
-        2. This ensures you profit on both the item cost AND shipping cost
+        2. Apply charm pricing strategy (.99, .49, or tiered)
+        3. This ensures you profit on both the item cost AND shipping cost
 
         Priority order:
         1. If multiplier is provided in product data, use it
@@ -86,7 +131,7 @@ class ProductMapper:
             multiplier: Optional override multiplier from product data
 
         Returns:
-            float: The calculated eBay listing price (includes delivery fee coverage)
+            float: The calculated eBay listing price (includes delivery fee coverage + charm pricing)
         """
         if amazon_price <= 0:
             return 0.0
@@ -102,8 +147,8 @@ class ProductMapper:
             tiered_multiplier = self.get_tiered_multiplier(total_amazon_cost)
             calculated_price = total_amazon_cost * tiered_multiplier
 
-        # Round to 2 decimal places
-        return round(calculated_price, 2)
+        # Apply charm pricing strategy
+        return self.apply_charm_pricing(calculated_price)
 
     def generate_sku(self, asin: str) -> str:
         """
@@ -312,6 +357,7 @@ class ProductMapper:
         description = amazon_product.get("description", "")
         bullet_points = amazon_product.get("bulletPoints", [])
         images = amazon_product.get("images", [])
+        specifications = amazon_product.get("specifications", {})
 
         html_parts = [
             '<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">',
@@ -339,6 +385,20 @@ class ProductMapper:
         if description and description.strip():
             html_parts.append('<h3 style="color: #555;">Product Description:</h3>')
             html_parts.append(f'<p style="line-height: 1.6;">{description.strip()}</p>')
+
+        # Add specifications if available
+        if specifications and isinstance(specifications, dict) and len(specifications) > 0:
+            html_parts.append('<h3 style="color: #555;">Specifications:</h3>')
+            html_parts.append('<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">')
+            for spec_key, spec_value in specifications.items():
+                if spec_value and str(spec_value).strip():  # Only include non-empty values
+                    html_parts.append(
+                        f'<tr style="border-bottom: 1px solid #ddd;">'
+                        f'<td style="padding: 10px; font-weight: bold; width: 40%;">{spec_key}:</td>'
+                        f'<td style="padding: 10px;">{spec_value}</td>'
+                        f'</tr>'
+                    )
+            html_parts.append('</table>')
 
         # Add shipping note
         html_parts.append(
