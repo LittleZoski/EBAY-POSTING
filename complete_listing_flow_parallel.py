@@ -505,7 +505,8 @@ class ParallelListingProcessor:
             "title": title,
             "description": description,
             "bulletPoints": bullet_points,
-            "images": images
+            "images": images,
+            "specifications": specifications
         })
 
         # STEP 7: Create or update offer
