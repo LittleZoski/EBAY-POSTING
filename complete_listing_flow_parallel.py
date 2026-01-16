@@ -479,11 +479,11 @@ class ParallelListingProcessor:
             },
             "availability": {
                 "shipToLocationAvailability": {
-                    "quantity": 10,
+                    "quantity": settings.default_inventory_quantity,
                     "availabilityDistributions": [
                         {
                             "merchantLocationKey": self.location_key,
-                            "quantity": 10
+                            "quantity": settings.default_inventory_quantity
                         }
                     ]
                 }
@@ -527,7 +527,7 @@ class ParallelListingProcessor:
             "sku": sku,
             "marketplaceId": "EBAY_US",
             "format": "FIXED_PRICE",
-            "availableQuantity": 10,
+            "availableQuantity": settings.default_inventory_quantity,
             "categoryId": category_id,
             "listingDescription": listing_description,
             "listingPolicies": {

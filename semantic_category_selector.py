@@ -395,11 +395,16 @@ OUTPUT FORMAT (JSON only, no explanations outside JSON):
         last_space = truncated.rfind(' ')
 
         if last_space > 0:
-            # Truncate at last word boundary
-            return title[:last_space].strip()
+            # Truncate at last word boundary and strip trailing punctuation
+            result = title[:last_space].strip()
+            # Remove trailing punctuation (-, –, —, ,, :, ;, etc.)
+            result = result.rstrip('-–—,:;|/\\')
+            return result.strip()
         else:
             # No space found, hard truncate (rare case)
-            return title[:max_length].strip()
+            result = title[:max_length].strip()
+            result = result.rstrip('-–—,:;|/\\')
+            return result.strip()
 
     def _extract_brand_simple(self, title: str, specifications: Dict = None) -> str:
         """Simple brand extraction without LLM"""

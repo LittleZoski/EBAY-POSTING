@@ -337,11 +337,11 @@ for idx, product in enumerate(products, 1):
         },
         "availability": {
             "shipToLocationAvailability": {
-                "quantity": 10,
+                "quantity": settings.default_inventory_quantity,
                 "availabilityDistributions": [
                     {
                         "merchantLocationKey": location_key,
-                        "quantity": 10
+                        "quantity": settings.default_inventory_quantity
                     }
                 ]
             }
@@ -386,7 +386,7 @@ for idx, product in enumerate(products, 1):
         "sku": sku,
         "marketplaceId": "EBAY_US",
         "format": "FIXED_PRICE",
-        "availableQuantity": 10,
+        "availableQuantity": settings.default_inventory_quantity,
         "categoryId": category_id,
         "listingDescription": listing_description,
         "listingPolicies": {

@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # Active account selection (1 or 2)
     active_account: int = 1
 
+    # Default inventory quantity (default: 5 to control listing fees)
+    default_inventory_quantity: int = 5
+
     # Parallel processing settings
     max_workers: int = 10
     use_parallel_processing: bool = True
