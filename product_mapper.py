@@ -17,7 +17,7 @@ class ProductMapper:
         self.price_markup_percentage = settings.price_markup_percentage
         self.fixed_markup_amount = settings.fixed_markup_amount
 
-        # Tiered pricing settings
+        # Legacy tiered pricing settings (backward compatibility - DEPRECATED)
         self.tier_1_max_price = settings.tier_1_max_price
         self.tier_1_multiplier = settings.tier_1_multiplier
         self.tier_2_max_price = settings.tier_2_max_price
@@ -25,6 +25,28 @@ class ProductMapper:
         self.tier_3_max_price = settings.tier_3_max_price
         self.tier_3_multiplier = settings.tier_3_multiplier
         self.tier_4_multiplier = settings.tier_4_multiplier
+
+        # Source-specific pricing tiers
+        self.source_tiers = {
+            'amazon': [
+                (settings.amazon_tier_1_max_price, settings.amazon_tier_1_multiplier),
+                (settings.amazon_tier_2_max_price, settings.amazon_tier_2_multiplier),
+                (settings.amazon_tier_3_max_price, settings.amazon_tier_3_multiplier),
+                (settings.amazon_tier_4_max_price, settings.amazon_tier_4_multiplier),
+                (settings.amazon_tier_5_max_price, settings.amazon_tier_5_multiplier),
+                (settings.amazon_tier_6_max_price, settings.amazon_tier_6_multiplier),
+                (float('inf'), settings.amazon_tier_7_multiplier),  # Final tier (no max)
+            ],
+            'yami': [
+                (settings.yami_tier_1_max_price, settings.yami_tier_1_multiplier),
+                (settings.yami_tier_2_max_price, settings.yami_tier_2_multiplier),
+                (settings.yami_tier_3_max_price, settings.yami_tier_3_multiplier),
+                (settings.yami_tier_4_max_price, settings.yami_tier_4_multiplier),
+                (settings.yami_tier_5_max_price, settings.yami_tier_5_multiplier),
+                (settings.yami_tier_6_max_price, settings.yami_tier_6_multiplier),
+                (float('inf'), settings.yami_tier_7_multiplier),  # Final tier (no max)
+            ],
+        }
 
         # Charm pricing strategy
         self.charm_pricing_strategy = settings.charm_pricing_strategy
@@ -45,27 +67,39 @@ class ProductMapper:
         except ValueError:
             return 0.0
 
-    def get_tiered_multiplier(self, amazon_price: float) -> float:
+    def get_tiered_multiplier(self, price: float, source: str = None) -> float:
         """
-        Get the appropriate price multiplier based on tiered pricing strategy.
-
-        Pricing tiers (optimized for Amazon-eBay arbitrage):
-        - Tier 1: Items < $20 → Higher multiplier (impulse buys)
-        - Tier 2: Items $20-$30 → Mid-high multiplier
-        - Tier 3: Items $30-$40 → Mid multiplier
-        - Tier 4: Items > $40 → Lower multiplier (price-sensitive buyers)
+        Get the appropriate price multiplier based on source-specific tiered pricing strategy.
 
         Args:
-            amazon_price: The Amazon product price
+            price: The product price (including delivery fee if applicable)
+            source: The product source ('amazon', 'yami', etc.). If None or unknown, falls back to legacy tiers.
 
         Returns:
             float: The multiplier to use for this price tier
+
+        Example:
+            For a $12 Amazon product:
+            - Falls in Amazon Tier 2 ($10-$15) → 2.3x multiplier
+
+            For a $12 Yami product:
+            - Falls in Yami Tier 2 ($8-$12) → 2.5x multiplier
         """
-        if amazon_price < self.tier_1_max_price:
+        # Use source-specific tiers if source is provided and recognized
+        if source and source.lower() in self.source_tiers:
+            tiers = self.source_tiers[source.lower()]
+            for max_price, multiplier in tiers:
+                if price < max_price:
+                    return multiplier
+            # If we reach here, use the last tier's multiplier (for prices above all tiers)
+            return tiers[-1][1]
+
+        # Fallback to legacy tiered pricing (backward compatibility)
+        if price < self.tier_1_max_price:
             return self.tier_1_multiplier
-        elif amazon_price < self.tier_2_max_price:
+        elif price < self.tier_2_max_price:
             return self.tier_2_multiplier
-        elif amazon_price < self.tier_3_max_price:
+        elif price < self.tier_3_max_price:
             return self.tier_3_multiplier
         else:
             return self.tier_4_multiplier
@@ -111,24 +145,25 @@ class ProductMapper:
             # Unknown strategy, return original rounded price
             return round(price, 2)
 
-    def calculate_ebay_price(self, amazon_price: float, delivery_fee: float = 0.0, multiplier: float = None) -> float:
+    def calculate_ebay_price(self, amazon_price: float, delivery_fee: float = 0.0, multiplier: float = None, source: str = None) -> float:
         """
-        Calculate eBay listing price with multiplier or markup, including delivery fee.
+        Calculate eBay listing price with source-specific multiplier or markup, including delivery fee.
 
         Calculation flow:
-        1. Apply tiered multiplier to (product price + delivery fee)
+        1. Apply source-specific tiered multiplier to (product price + delivery fee)
         2. Apply charm pricing strategy (.99, .49, or tiered)
         3. This ensures you profit on both the item cost AND shipping cost
 
         Priority order:
         1. If multiplier is provided in product data, use it
-        2. Otherwise, use tiered pricing strategy based on amazon_price
+        2. Otherwise, use source-specific tiered pricing strategy (amazon, yami, etc.)
         3. Fallback: legacy markup settings (backward compatibility)
 
         Args:
-            amazon_price: The Amazon product price
-            delivery_fee: Amazon delivery/shipping fee (default: 0.0)
+            amazon_price: The product price
+            delivery_fee: Delivery/shipping fee (default: 0.0)
             multiplier: Optional override multiplier from product data
+            source: Product source ('amazon', 'yami', etc.) for source-specific pricing
 
         Returns:
             float: The calculated eBay listing price (includes delivery fee coverage + charm pricing)
@@ -136,16 +171,16 @@ class ProductMapper:
         if amazon_price <= 0:
             return 0.0
 
-        # Total Amazon cost = product price + delivery fee
-        total_amazon_cost = amazon_price + delivery_fee
+        # Total cost = product price + delivery fee
+        total_cost = amazon_price + delivery_fee
 
         if multiplier is not None:
             # Use the multiplier directly (from product data)
-            calculated_price = total_amazon_cost * multiplier
+            calculated_price = total_cost * multiplier
         else:
-            # Use tiered pricing strategy based on total cost
-            tiered_multiplier = self.get_tiered_multiplier(total_amazon_cost)
-            calculated_price = total_amazon_cost * tiered_multiplier
+            # Use source-specific tiered pricing strategy based on total cost
+            tiered_multiplier = self.get_tiered_multiplier(total_cost, source=source)
+            calculated_price = total_cost * tiered_multiplier
 
         # Apply charm pricing strategy
         return self.apply_charm_pricing(calculated_price)
@@ -213,18 +248,19 @@ class ProductMapper:
         images = sanitized_product.get("images", [])
         amazon_price_str = sanitized_product.get("price", "$0.00")
         delivery_fee_str = sanitized_product.get("deliveryFee", "$0.00")
+        source = sanitized_product.get("source", None)  # Extract source field
 
         # Get price multiplier from product data (optional override)
-        # If not provided, calculate_ebay_price will use tiered pricing
+        # If not provided, calculate_ebay_price will use source-specific tiered pricing
         price_multiplier = sanitized_product.get("price_multiplier", None)
 
         # Generate SKU
         sku = self.generate_sku(asin)
 
-        # Parse and calculate price (includes delivery fee)
+        # Parse and calculate price (includes delivery fee + source-specific pricing)
         amazon_price = self.parse_price(amazon_price_str)
         delivery_fee = self.parse_price(delivery_fee_str)
-        ebay_price = self.calculate_ebay_price(amazon_price, delivery_fee=delivery_fee, multiplier=price_multiplier)
+        ebay_price = self.calculate_ebay_price(amazon_price, delivery_fee=delivery_fee, multiplier=price_multiplier, source=source)
 
         # Build product description (already using sanitized data)
         full_description = self._build_description(
@@ -279,15 +315,16 @@ class ProductMapper:
         title = sanitized_product.get("title", "Untitled Product")
         amazon_price_str = sanitized_product.get("price", "$0.00")
         delivery_fee_str = sanitized_product.get("deliveryFee", "$0.00")
+        source = sanitized_product.get("source", None)  # Extract source field
 
         # Get price multiplier from product data (optional override)
-        # If not provided, calculate_ebay_price will use tiered pricing
+        # If not provided, calculate_ebay_price will use source-specific tiered pricing
         price_multiplier = sanitized_product.get("price_multiplier", None)
 
-        # Calculate pricing (includes delivery fee)
+        # Calculate pricing (includes delivery fee + source-specific pricing)
         amazon_price = self.parse_price(amazon_price_str)
         delivery_fee = self.parse_price(delivery_fee_str)
-        ebay_price = self.calculate_ebay_price(amazon_price, delivery_fee=delivery_fee, multiplier=price_multiplier)
+        ebay_price = self.calculate_ebay_price(amazon_price, delivery_fee=delivery_fee, multiplier=price_multiplier, source=source)
 
         offer = {
             "sku": sku,

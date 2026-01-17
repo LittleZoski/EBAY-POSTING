@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     price_markup_percentage: float = 20.0
     fixed_markup_amount: float = 5.00
 
-    # Tiered Pricing Strategy Settings
+    # Legacy Tiered Pricing Strategy Settings (DEPRECATED - use source-specific tiers)
     tier_1_max_price: float = 20.0
     tier_1_multiplier: float = 1.85
     tier_2_max_price: float = 30.0
@@ -30,6 +30,40 @@ class Settings(BaseSettings):
     tier_3_max_price: float = 40.0
     tier_3_multiplier: float = 1.6
     tier_4_multiplier: float = 1.5
+
+    # ========================================
+    # SOURCE-SPECIFIC TIERED PRICING SETTINGS
+    # ========================================
+
+    # Amazon Pricing Tiers (7 tiers for fine-grained control)
+    amazon_tier_1_max_price: float = 10.0
+    amazon_tier_1_multiplier: float = 2.5
+    amazon_tier_2_max_price: float = 15.0
+    amazon_tier_2_multiplier: float = 2.3
+    amazon_tier_3_max_price: float = 20.0
+    amazon_tier_3_multiplier: float = 2.1
+    amazon_tier_4_max_price: float = 30.0
+    amazon_tier_4_multiplier: float = 1.95
+    amazon_tier_5_max_price: float = 40.0
+    amazon_tier_5_multiplier: float = 1.85
+    amazon_tier_6_max_price: float = 60.0
+    amazon_tier_6_multiplier: float = 1.75
+    amazon_tier_7_multiplier: float = 1.65
+
+    # Yami Pricing Tiers (7 tiers for fine-grained control)
+    yami_tier_1_max_price: float = 8.0
+    yami_tier_1_multiplier: float = 2.8
+    yami_tier_2_max_price: float = 12.0
+    yami_tier_2_multiplier: float = 2.5
+    yami_tier_3_max_price: float = 18.0
+    yami_tier_3_multiplier: float = 2.3
+    yami_tier_4_max_price: float = 25.0
+    yami_tier_4_multiplier: float = 2.1
+    yami_tier_5_max_price: float = 35.0
+    yami_tier_5_multiplier: float = 1.95
+    yami_tier_6_max_price: float = 50.0
+    yami_tier_6_multiplier: float = 1.85
+    yami_tier_7_multiplier: float = 1.75
 
     # Charm Pricing Strategy
     # Options: "always_99", "always_49", "tiered"
